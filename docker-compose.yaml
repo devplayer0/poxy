@@ -1,0 +1,11 @@
+version: '3'
+services:
+  app:
+    image: devplayer0/poxy:dev
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/usr/local/poxy
+    ports:
+      - 8080:8080
