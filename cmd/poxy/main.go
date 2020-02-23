@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"os"
 	"os/signal"
 
@@ -9,6 +10,23 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func init() {
+	level := log.InfoLevel
+	if verbose := flag.Bool("-v", false, "write debug output"); *verbose {
+		level = log.DebugLevel
+	}
+	if trace := flag.Bool("-trace", false, "write details about requests"); *trace {
+		level = log.TraceLevel
+	}
+
+	if levelStr := os.Getenv("LOG"); levelStr != "" {
+		if l, err := log.ParseLevel(levelStr); err == nil {
+			level = l
+		}
+	}
+
+	log.SetLevel(level)
+}
 func main() {
 	s := server.NewServer()
 
