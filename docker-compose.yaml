@@ -7,7 +7,9 @@ services:
       dockerfile: Dockerfile.dev
     volumes:
       - .:/usr/local/poxy
+      - ./cache:/var/cache/poxy
     environment:
       - LOG=TRACE
+      - CACHE_PATH=/var/cache/poxy
     ports:
       - 8080:8080

@@ -28,7 +28,15 @@ func init() {
 	log.SetLevel(level)
 }
 func main() {
-	s := server.NewServer()
+	cachePath := flag.String("-cache", "", "enable caching in directory")
+	if p := os.Getenv("CACHE_PATH"); p != "" {
+		cachePath = &p
+	}
+
+	s, err := server.NewServer(*cachePath)
+	if err != nil {
+		log.WithField("err", err).Fatal("Failed to create server")
+	}
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, unix.SIGINT, unix.SIGTERM)

@@ -10,12 +10,19 @@ import (
 type Server struct {
 	router *mux.Router
 	http   *http.Server
+	cache  *Cache
 }
 
 // NewServer returns a new HTTP(S) proxy instance
-func NewServer() *Server {
+func NewServer(cachePath string) (*Server, error) {
+	c, err := NewCache(cachePath)
+	if err != nil {
+		return nil, err
+	}
+
 	s := &Server{
 		router: mux.NewRouter(),
+		cache:  c,
 	}
 
 	h := &http.Server{
@@ -24,7 +31,7 @@ func NewServer() *Server {
 	}
 
 	s.http = h
-	return s
+	return s, nil
 }
 
 // Start begins the HTTP proxy listening

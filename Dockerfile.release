@@ -1,7 +1,7 @@
 FROM golang:1.13-alpine as builder
 RUN apk --no-cache add gcc musl-dev
 
-WORKDIR /usr/local/webspaced
+WORKDIR /usr/local/poxy
 COPY go.* ./
 RUN go mod download
 
@@ -11,6 +11,8 @@ RUN go build -ldflags '-s -w' -o bin/ ./cmd/...
 
 FROM alpine:3.11
 
-COPY --from=builder /usr/local/webspaced/bin/* /usr/local/bin/
+COPY --from=builder /usr/local/poxy/bin/* /usr/local/bin/
 
-ENTRYPOINT ["/usr/local/bin/webspaced"]
+VOLUME "/var/cache/poxy"
+ENTRYPOINT ["/usr/local/bin/poxy"]
+CMD ["-cache=/var/cache/poxy"]
