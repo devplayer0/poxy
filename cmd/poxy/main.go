@@ -10,12 +10,19 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+var cachePath string
+
 func init() {
+	verbose := flag.Bool("v", false, "write debug output")
+	trace := flag.Bool("trace", false, "write details about requests")
+	flag.StringVar(&cachePath, "cache", "", "enable caching in directory")
+	flag.Parse()
+
 	level := log.InfoLevel
-	if verbose := flag.Bool("-v", false, "write debug output"); *verbose {
+	if *verbose {
 		level = log.DebugLevel
 	}
-	if trace := flag.Bool("-trace", false, "write details about requests"); *trace {
+	if *trace {
 		level = log.TraceLevel
 	}
 
@@ -25,15 +32,14 @@ func init() {
 		}
 	}
 
+	if p := os.Getenv("CACHE_PATH"); p != "" {
+		cachePath = p
+	}
+
 	log.SetLevel(level)
 }
 func main() {
-	cachePath := flag.String("-cache", "", "enable caching in directory")
-	if p := os.Getenv("CACHE_PATH"); p != "" {
-		cachePath = &p
-	}
-
-	s, err := server.NewServer(*cachePath)
+	s, err := server.NewServer(cachePath)
 	if err != nil {
 		log.WithField("err", err).Fatal("Failed to create server")
 	}
