@@ -15,6 +15,7 @@ func (s *Server) proxyCONNECT(w http.ResponseWriter, r *http.Request) {
 		"target": r.URL.Host,
 	}).Trace("Performing CONNECT request")
 
+	// Attempt to connect to the requested backend
 	dstConn, err := net.Dial("tcp", r.URL.Host)
 	if err != nil {
 		w.WriteHeader(http.StatusBadGateway)
@@ -23,6 +24,8 @@ func (s *Server) proxyCONNECT(w http.ResponseWriter, r *http.Request) {
 	}
 	defer dstConn.Close()
 
+	// Hihacking the connection stops the server from sending any more HTTP "stuff" and gives us access to the raw TCP
+	// connection
 	hj := w.(http.Hijacker)
 	srcConn, srcRw, err := hj.Hijack()
 	if err != nil {
@@ -32,12 +35,14 @@ func (s *Server) proxyCONNECT(w http.ResponseWriter, r *http.Request) {
 	}
 	defer srcConn.Close()
 
+	// Inform the client their proxy is good to go
 	if _, err :=
 		fmt.Fprintf(srcConn, "%v %v %v\r\n\r\n", r.Proto, http.StatusOK, "Connection Established"); err != nil {
 		log.WithField("err", err).Error("Failed to send Connection Established message")
 		return
 	}
 
+	// Pipe between client, backend and vice-versa
 	errChan := make(chan error)
 	go func() {
 		_, err := io.Copy(srcRw, dstConn)
