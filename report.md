@@ -1,12 +1,17 @@
-# Poxy
-_Oh it's that poxy proxy..._
+---
+papersize: a4
+geometry: margin=2cm
+title: CSU34031
+subtitle: Project 1 - Web Proxy Server
+urlcolor: blue
+author: Jack O'Sullivan - \#17331147 - [osullj19@tcd.ie](mailto:osullj19@tcd.ie)
+---
 
-<p align="center">
-    <img src="screenshot.png">
-</p>
-
+# Introduction
 Poxy is a forward proxy server for HTTP(S) and websockets (or anything else that speaks the HTTP `CONNECT` verb), with
 limited HTTP caching support (based on [RFC 7234][rfc7234]).
+
+This code is available [on GitHub](https://github.com/devplayer0/poxy).
 
 ## Building / running
 You'll need [Docker](https://docs.docker.com/install/) and [Docker Compose](https://docs.docker.com/compose/install/).
@@ -42,6 +47,7 @@ HTTPS and WebSocket clients will use the `CONNECT` verb when proxying. It is not
 requests due to the raw stream nature of `CONNECT` sessions (along with the fact that HTTPS requests will obviously be
 encrypted an thus opaque to the proxy).
 
+\newpage
 ## HTTP proxying (with cache)
 Incoming requests with a hostname in the request line are treated as forward proxy requests, and are passed to code in
 `internal/server/http.go`. Proxying HTTP requests is relatively easy in Go. The process essentially boils down to:
@@ -91,6 +97,7 @@ key for the response. This key is constructed as the following path:
  - `md5URI` is a subdirectory of `md5Host` whose name is the MD5 hash of the request line URI (path and query)
  - `varyKey` is a final key calculated for a response based on its `Vary` header
 
+\newpage
 #### Vary key
 `Cache.keyedPath()` calls `calculateVaryKey()` to obtain `varyKey` based on the value of the `Vary` header. The `Vary`
 header's purpose is to distinguish between multiple responses on the same path whose content varies based on certain
@@ -151,6 +158,7 @@ URL blocking is somewhat incomplete: a regex can be submitted through the browse
 requests (a REST API endpoint compiles the regex and adds it to a list). However, there is no browser feedback (unless
 an error occurs), the list is not persistent and it is not possible to remove rules without restarting the proxy.
 
+\newpage
 ## Testing
 Since the internet runs almost entirely on HTTPS today, HTTP sites to test caching on are few and far between.
 https://cache-tests.fyi/ provides a test suite for HTTP caches, ideal for testing Poxy. Some slight modifications were
@@ -178,3 +186,25 @@ Below are some sample test results which show interesting comparisons between ot
 ![Other Caching Requirements](tests/vary-cache.png)
 
 [rfc7234]: https://tools.ietf.org/html/rfc7234
+
+\newpage
+# Code Listings
+## `cmd/poxy/main.go`
+```{.go include=report/cmd/poxy/main.go}
+```
+
+## `internal/server/connect.go`
+```{.go include=report/internal/server/connect.go}
+```
+
+## `internal/server/console.go`
+```{.go include=report/internal/server/console.go}
+```
+
+## `internal/server/http.go`
+```{.go include=report/internal/server/http.go}
+```
+
+## `internal/server/server.go`
+```{.go include=report/internal/server/server.go}
+```
