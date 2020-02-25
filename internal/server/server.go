@@ -24,6 +24,7 @@ func NewServer(cachePath string) (*Server, error) {
 		router: mux.NewRouter(),
 		cache:  c,
 	}
+	s.mountConsole()
 
 	h := &http.Server{
 		Addr:    ":8080",
