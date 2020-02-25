@@ -1,14 +1,17 @@
 package server
 
 import (
+	"bufio"
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -38,52 +41,94 @@ func hashString(s string) string {
 	sum := md5.Sum([]byte(s))
 	return fmt.Sprintf("%x", sum)
 }
-func (c *Cache) keyedPath(r *http.Response) (string, error) {
-	parent := path.Join(c.Path, hashString(r.Request.Host), hashString(r.Request.URL.RequestURI()))
+
+var entryRegex = regexp.MustCompile(`^(\S+)_(\S+)$`)
+
+// calculateVaryKey calculates a unique, stable (ordering of headers doesn't matter) filename based on a Vary header
+// and the values of the given headers in the request
+func calculateVaryKey(vary string, r *http.Request) string {
+	var sorted []string
+	var values []string
+	for _, header := range strings.Split(vary, ",") {
+		header = strings.TrimSpace(header)
+		header = http.CanonicalHeaderKey(header)
+		if _, ok := r.Header[header]; !ok {
+			r.Header[header] = []string{""}
+		}
+
+		sorted = append(sorted, header)
+	}
+
+	// Sort to make the key stable (order of headers might vary)
+	sort.Strings(sorted)
+	for _, header := range sorted {
+		sort.Strings(r.Header[header])
+		valueEnc, _ := json.Marshal(r.Header[header])
+		values = append(values, string(valueEnc))
+	}
+
+	// TODO: List of headers could be quite long, might exceed max file length - store in a "database" in the dir
+	key := strings.Join(sorted, ",")
+	value := strings.Join(values, ",")
+	log.WithFields(log.Fields{
+		"key":   key,
+		"value": value,
+	}).Debug("Unencoded Vary key")
+	return fmt.Sprintf("%v_%v", key, hashString(value))
+}
+func (c *Cache) keyedPath(vary string, r *http.Request) (string, error) {
+	parent := path.Join(c.Path, hashString(r.Host), hashString(r.URL.RequestURI()))
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return "", fmt.Errorf("Failed to create cache entry parent directories: %w", err)
 	}
 
 	file := "base"
-	if vary, ok := r.Header["Vary"]; ok {
-		var sorted []string
-		var values []string
-		for _, header := range strings.Split(vary[0], ",") {
-			header = strings.TrimSpace(header)
-			header = http.CanonicalHeaderKey(header)
-			if _, ok := r.Request.Header[header]; !ok {
-				r.Request.Header[header] = []string{""}
+
+	if vary != "" {
+		// We have the Vary header (i.e. we have response), we can calculate the required key
+		file = calculateVaryKey(vary, r)
+	} else {
+		// Either no response or response doesn't contain Vary header - let's try to find a suitable existing candidate
+		files, err := ioutil.ReadDir(parent)
+		if err != nil {
+			return "", fmt.Errorf("Failed to list files in cache directory: %w", err)
+		}
+
+		var candidates []os.FileInfo
+		for _, info := range files {
+			// Only want to look at existing varied requests
+			m := entryRegex.FindStringSubmatch(info.Name())
+			if len(m) == 0 {
+				continue
 			}
 
-			sorted = append(sorted, header)
-		}
-		sort.Strings(sorted)
-		for _, header := range sorted {
-			sort.Strings(r.Request.Header[header])
-			valueEnc, _ := json.Marshal(r.Request.Header[header])
-			values = append(values, string(valueEnc))
+			if calculateVaryKey(m[1], r) == info.Name() {
+				log.WithField("key", info.Name()).Debug("Found existing cached request matching Vary requirements")
+				candidates = append(candidates, info)
+			}
 		}
 
-		key := strings.Join(sorted, ",")
-		value := strings.Join(values, ",")
-		log.WithFields(log.Fields{
-			"file":  file,
-			"key":   key,
-			"value": value,
-		}).Trace("Varying with SHA256 value")
-		file = fmt.Sprintf("%v_%v", key, hashString(value))
+		if len(candidates) != 0 {
+			// Use newest matching response
+			sort.Slice(candidates, func(i, j int) bool {
+				return candidates[i].ModTime().After(files[j].ModTime())
+			})
+
+			file = candidates[0].Name()
+		}
 	}
+
 	return filepath.Join(parent, file), nil
 }
 
 // Store transparently handles caching a HTTP response
-func (c *Cache) Store(r *http.Response) (io.ReadCloser, error) {
+func (c *Cache) Store(r *http.Response) error {
 	if c.Path == "" || r.Request.Method != http.MethodGet || r.StatusCode != http.StatusOK {
 		// We will only cache GET requests with a 200 response
-		return r.Body, nil
+		return nil
 	}
 	if vary, ok := r.Header["Vary"]; ok && strings.TrimSpace(vary[0]) == "*" {
-		return r.Body, nil
+		return nil
 	}
 
 	authOk := false
@@ -96,7 +141,7 @@ func (c *Cache) Store(r *http.Response) (io.ReadCloser, error) {
 
 			switch control {
 			case "no-store", "private":
-				return r.Body, nil
+				return nil
 			case "public", "must-revalidate", "s-maxage":
 				authOk = true
 			}
@@ -104,37 +149,103 @@ func (c *Cache) Store(r *http.Response) (io.ReadCloser, error) {
 	}
 
 	if _, ok := r.Header["Authorization"]; ok && !authOk {
-		return r.Body, nil
+		return nil
 	}
 
 	defer r.Body.Close()
-	path, err := c.keyedPath(r)
+	vary := ""
+	if v, ok := r.Header["Vary"]; ok {
+		vary = v[0]
+	}
+	path, err := c.keyedPath(vary, r.Request)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	log.WithField("path", path).Trace("Storing request")
 	f, err := os.Create(path)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to create cache entry: %w", err)
+		return fmt.Errorf("Failed to create cache entry: %w", err)
 	}
 
-	if err := json.NewEncoder(f).Encode(r.Header); err != nil {
-		return nil, fmt.Errorf("Failed to write headers to cache entry: %w", err)
+	if err := r.Write(f); err != nil {
+		return fmt.Errorf("Failed to write HTTP response out to cache: %w", err)
 	}
-	bodyStart, err := f.Seek(0, os.SEEK_CUR)
+	if _, err := f.Seek(0, os.SEEK_SET); err != nil {
+		return fmt.Errorf("Failed to rewind cache entry: %w", err)
+	}
+
+	cacheRes, err := http.ReadResponse(bufio.NewReader(f), r.Request)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to get cache entry file positiob: %w", err)
+		return fmt.Errorf("Failed to parse on-disk cache entry: %w", err)
 	}
 
-	if _, err := io.Copy(f, r.Body); err != nil {
-		return nil, fmt.Errorf("Failed to write destination response to cache entry: %w", err)
+	*r = *cacheRes
+	return nil
+}
+
+func errRes(s int) *http.Response {
+	return &http.Response{StatusCode: s}
+}
+func (c *Cache) doReq(r *http.Request) error {
+	r2, err := http.NewRequest(r.Method, r.RequestURI, r.Body)
+	if err != nil {
+		r.Response = errRes(http.StatusBadRequest)
+		return fmt.Errorf("Bad request: %w", err)
 	}
 
-	if _, err := f.Seek(bodyStart, os.SEEK_SET); err != nil {
-		return nil, fmt.Errorf("Failed to rewind cache entry: %w", err)
+	r2.Header = r.Header
+	r2.Header["X-Forwarded-For"] = []string{strings.Split(r.RemoteAddr, ":")[0]}
+
+	res, err := http.DefaultTransport.RoundTrip(r2)
+	if err != nil {
+		r.Response = errRes(http.StatusBadGateway)
+		return fmt.Errorf("Backend request failed: %w", err)
 	}
-	return f, nil
+
+	if err = c.Store(res); err != nil {
+		r.Response = errRes(http.StatusInternalServerError)
+		return err
+	}
+	r.Response = res
+	return nil
+}
+func validateStored(r *http.Response) error {
+	return nil
+}
+
+// Load transparently attempts to retrieve a HTTP response from cache, connecting to the backend as necessary
+func (c *Cache) Load(r *http.Request) error {
+	if c.Path == "" {
+		return c.doReq(r)
+	}
+
+	path, err := c.keyedPath("", r)
+	if err != nil {
+		return err
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			r.Response = errRes(http.StatusInternalServerError)
+			return fmt.Errorf("Failed to open cache entry for reading: %w", err)
+		}
+
+		return c.doReq(r)
+	}
+
+	log.WithField("path", path).Trace("Attempting to use stored request")
+
+	res, err := http.ReadResponse(bufio.NewReader(f), r)
+	if err != nil {
+		f.Close()
+		r.Response = errRes(http.StatusInternalServerError)
+		return fmt.Errorf("Failed to parse on-disk cache entry: %w", err)
+	}
+
+	r.Response = res
+	return nil
 }
 
 func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request) {
@@ -144,39 +255,19 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request) {
 		"url":    r.URL,
 	}).Trace("Proxying HTTP request")
 
-	r2, err := http.NewRequest(r.Method, r.RequestURI, r.Body)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "Bad request: %v", err)
+	if err := s.cache.Load(r); err != nil {
+		log.WithField("err", err).Error("Failed to proxy HTTP request")
+		http.Error(w, err.Error(), r.Response.StatusCode)
 		return
 	}
-
-	r2.Header = r.Header
-	delete(r2.Header, "Proxy-Connection")
-	r2.Header["X-Forwarded-For"] = []string{strings.Split(r.RemoteAddr, ":")[0]}
-
-	res, err := http.DefaultTransport.RoundTrip(r2)
-	if err != nil {
-		w.WriteHeader(http.StatusBadGateway)
-		fmt.Fprintf(w, "Upstream request failed: %v", err)
-		return
-	}
+	defer r.Response.Body.Close()
 
 	resHeader := w.Header()
-	for name, value := range res.Header {
+	for name, value := range r.Response.Header {
 		resHeader[name] = value
 	}
-
-	rr, err := s.cache.Store(res)
-	if err != nil {
-		log.WithField("err", err).Error("Failed to store cache entry")
-		http.Error(w, "Cache write failed", http.StatusInternalServerError)
-		return
-	}
-	defer rr.Close()
-
-	w.WriteHeader(res.StatusCode)
-	if _, err := io.Copy(w, rr); err != nil {
-		log.WithField("err", err).Error("Failed to proxy request")
+	w.WriteHeader(r.Response.StatusCode)
+	if _, err := io.Copy(w, r.Response.Body); err != nil {
+		log.WithField("err", err).Error("Failed to send proxied HTTP response")
 	}
 }
