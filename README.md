@@ -139,4 +139,38 @@ sent to the client.
 If the stored response is stale, the request will fall through to the backend - validation according to [Section 4.3 of
 RFC 7234](https://tools.ietf.org/html/rfc7234#section-4.3) is not implemented.
 
+## Web console
+A simple Vue.js-based web console is provided to view request logs and block HTTP requests based on a regex which
+matches a request URI. Both HTTP and `CONNECT` proxies trace requests through an info object and push the object to
+the browser via server-sent events.
+
+URL blocking is somewhat incomplete: a regex can be submitted through the browser and will be applied to incoming proxy
+requests (a REST API endpoint compiles the regex and adds it to a list). However, there is no browser feedback (unless
+an error occurs), the list is not persistent and it is not possible to remove rules without restarting the proxy.
+
+## Testing
+Since the internet runs almost entirely on HTTPS today, HTTP sites to test caching on are few and far between.
+https://cache-tests.fyi/ provides a test suite for HTTP caches, ideal for testing Poxy. Some slight modifications were
+made to allow for testing a forward proxy (v.s. browser caches and reverse proxies). The modified version is available
+at https://github.com/devplayer0/cache-tests.
+
+To perform the tests, follow the steps below:
+1. Clone the test repo
+2. Install dependencies: `npm install`
+3. Start the test server: `npm run server`
+4. Start Poxy (ensuring caching is enabled)
+5. Execute the tests and save the results:
+`http_proxy=http://localhost:8080 npm run --silent cli --base=http://localhost:8000 > results/poxy.json`
+6. Open http://localhost:8000 to view results in the browser
+
+### Sample results
+Below are some sample test results which show interesting comparisons between other common caches.
+
+![Cache-Control Freshness](tests/cc-freshness.png)
+![Expires Freshness](tests/exp-freshness.png)
+![Cache-Control Response Directives](tests/cc-response.png)
+![Heuristic Freshness](tests/heur-freshness.png)
+![Vary and Cache Keys](tests/vary-cache.png)
+![Other Caching Requirements](tests/vary-cache.png)
+
 [rfc7234]: https://tools.ietf.org/html/rfc7234
