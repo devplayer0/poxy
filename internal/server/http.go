@@ -22,6 +22,7 @@ import (
 
 // ReqInfo describes a proxied request
 type ReqInfo struct {
+	Time   int64  `json:"time"`
 	Method string `json:"method"`
 	URL    string `json:"url"`
 	Status int    `json:"status"`
@@ -437,6 +438,7 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request) {
 		"url":    r.URL,
 	}).Debug("Proxying HTTP request")
 	info := ReqInfo{
+		Time:   time.Now().Unix(),
 		Method: r.Method,
 		URL:    r.RequestURI,
 	}
