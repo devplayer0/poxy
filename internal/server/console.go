@@ -3,9 +3,11 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/r3labs/sse"
 	log "github.com/sirupsen/logrus"
@@ -95,7 +97,29 @@ func (s *Server) publishJSON(id string, v interface{}) error {
 	return nil
 }
 
+func (s *Server) apiBlock(w http.ResponseWriter, r *http.Request) {
+	b, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		log.WithField("err", err).Error("Failed to read request body")
+		return
+	}
+
+	rString := string(b)
+	log.WithField("regex", rString).Debug("Adding block expression")
+
+	regex, err := regexp.Compile(rString)
+	if err != nil {
+		JSONErrResponse(w, fmt.Errorf("Failed to compile regular expression: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	s.cache.BlockList = append(s.cache.BlockList, regex)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) mountConsole() {
+	s.router.HandleFunc("/api/block", s.apiBlock).Methods("POST")
+
 	s.events = sse.New()
 	s.events.CreateStream(reqStream)
 	s.router.HandleFunc("/events", s.events.HTTPHandler)

@@ -34,13 +34,14 @@ type ReqInfo struct {
 // Varying requests and serving fresh responses are (mostly) implemented
 // Validation of stale requests is unimplemented
 type Cache struct {
-	Path string
+	Path      string
+	BlockList []*regexp.Regexp
 }
 
 // NewCache creates a new HTTP cache
 func NewCache(path string) (*Cache, error) {
 	if path == "" {
-		return &Cache{""}, nil
+		return &Cache{Path: ""}, nil
 	}
 
 	log.Info("Enabling cache")
@@ -48,7 +49,7 @@ func NewCache(path string) (*Cache, error) {
 		return nil, err
 	}
 
-	return &Cache{path}, nil
+	return &Cache{Path: path}, nil
 }
 
 func hashString(s string) string {
@@ -433,17 +434,33 @@ func (c *Cache) Load(r *http.Request, info *ReqInfo) error {
 
 // proxyHTTP performs proxying of plain HTTP requests, with optional caching
 func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request) {
-	log.WithFields(log.Fields{
-		"source": r.RemoteAddr,
-		"method": r.Method,
-		"url":    r.URL,
-	}).Debug("Proxying HTTP request")
 	info := ReqInfo{
 		Time:   time.Now().Unix(),
 		Method: r.Method,
 		URL:    r.RequestURI,
 	}
 	defer s.publishJSON(reqStream, &info)
+
+	for _, regex := range s.cache.BlockList {
+		if regex.Match([]byte(r.RequestURI)) {
+			info.Type = "blocked"
+			info.Status = http.StatusForbidden
+			log.WithFields(log.Fields{
+				"source": r.RemoteAddr,
+				"method": r.Method,
+				"url":    r.URL,
+			}).Info("Blocking HTTP request")
+
+			http.Error(w, "Request blocked", http.StatusForbidden)
+			return
+		}
+	}
+
+	log.WithFields(log.Fields{
+		"source": r.RemoteAddr,
+		"method": r.Method,
+		"url":    r.URL,
+	}).Debug("Proxying HTTP request")
 
 	// Load the response through the caching layer, which will transparently store / read cached responses
 	start := time.Now()

@@ -17,6 +17,7 @@ Vue.component('RequestInfo', {
         case 'proxied':
           return 'badge-dark';
         case 'failed':
+        case 'blocked':
           return 'badge-danger';
         default:
           return 'badge-info';
@@ -54,6 +55,36 @@ Vue.component('RequestList', {
     this.sse.close();
   }
 });
+
+Vue.component('BlockForm', {
+  template: `
+    <div class="input-group mb-3">
+      <input type="text" class="form-control" placeholder="Enter a regex" v-model="regex">
+      <div class="input-group-append">
+        <button class="btn btn-success" @click="block(regex)">Add</button>
+      </div>
+    </div>
+  `,
+  data: function() {
+    return {
+      regex: ''
+    };
+  },
+  methods: {
+    block: async function(regex) {
+      let res = await fetch('/api/block', {
+        method: 'POST',
+        body: regex,
+      });
+
+      if (!res.ok) {
+        let err = await res.json();
+        alert(err.message);
+        return;
+      }
+    }
+  }
+})
 
 const vm = new Vue({
   el: '#app',
