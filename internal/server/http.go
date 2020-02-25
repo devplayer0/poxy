@@ -13,7 +13,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -187,6 +189,18 @@ func (c *Cache) Store(r *http.Response) error {
 func errRes(s int) *http.Response {
 	return &http.Response{StatusCode: s}
 }
+func controlSet(h http.Header, c string) bool {
+	if controls, ok := h["Cache-Control"]; ok {
+		for _, control := range controls {
+			control = strings.TrimSpace(strings.ToLower(control))
+			if control == c {
+				return true
+			}
+		}
+	}
+
+	return false
+}
 func (c *Cache) doReq(r *http.Request) error {
 	r2, err := http.NewRequest(r.Method, r.RequestURI, r.Body)
 	if err != nil {
@@ -210,8 +224,74 @@ func (c *Cache) doReq(r *http.Request) error {
 	r.Response = res
 	return nil
 }
-func validateStored(r *http.Response) error {
-	return nil
+
+func freshness(r *http.Response) int64 {
+	if controls, ok := r.Header["Cache-Control"]; ok {
+		// Hack to make s-maxage appear first
+		sort.Strings(controls)
+		for _, control := range controls {
+			control = strings.TrimSpace(strings.ToLower(control))
+			if strings.HasPrefix(control, "s-maxage") || strings.HasPrefix(control, "max-age") {
+				s := strings.Split(control, "=")
+				if len(s) != 2 {
+					continue
+				}
+
+				if f, err := strconv.ParseInt(s[1], 10, 64); err == nil {
+					return f
+				}
+			}
+		}
+	}
+	if exp, ok := r.Header["Expires"]; ok && len(exp) == 1 {
+		if e, err := http.ParseTime(exp[0]); err == nil {
+			if date, ok := r.Header["Date"]; ok && len(date) == 1 {
+				if d, err := http.ParseTime(date[0]); err == nil {
+					return int64(e.Sub(d).Seconds())
+				}
+			}
+		}
+	}
+
+	// TODO: Implement heuristic
+	return 0
+}
+func age(f *os.File, r *http.Response) int64 {
+	var ageValue int64
+	if ages, ok := r.Header["Age"]; ok && len(ages) == 1 {
+		if age, err := strconv.ParseInt(ages[0], 10, 64); err != nil {
+			ageValue = age
+		}
+	}
+
+	dateValue := time.Now().Unix()
+	if date, ok := r.Header["Date"]; ok && len(date) == 1 {
+		if d, err := http.ParseTime(date[0]); err == nil {
+			dateValue = d.Unix()
+		}
+	}
+
+	now := time.Now().Unix()
+
+	responseTime := dateValue
+	if s, err := f.Stat(); err == nil {
+		responseTime = s.ModTime().Unix()
+	}
+
+	var apparentAge int64
+	apparentAge = 0
+	if d := responseTime - dateValue; d > apparentAge {
+		apparentAge = d
+	}
+
+	// TODO: Factor in request time
+	correctedInitialAge := apparentAge
+	if ageValue > correctedInitialAge {
+		correctedInitialAge = ageValue
+	}
+
+	residentTime := now - responseTime
+	return correctedInitialAge + residentTime
 }
 
 // Load transparently attempts to retrieve a HTTP response from cache, connecting to the backend as necessary
@@ -244,8 +324,30 @@ func (c *Cache) Load(r *http.Request) error {
 		return fmt.Errorf("Failed to parse on-disk cache entry: %w", err)
 	}
 
-	r.Response = res
-	return nil
+	// TODO: Maybe consider HTTP/1.1 Pragma header
+	mustRevalidate := controlSet(r.Header, "no-cache")
+	if !mustRevalidate {
+		mustRevalidate = controlSet(res.Header, "no-cache")
+	}
+
+	if !mustRevalidate {
+		freshness := freshness(res)
+		currentAge := age(f, res)
+
+		if freshness > currentAge {
+			log.WithFields(log.Fields{
+				"path": path,
+				"age":  currentAge,
+			}).Trace("Request is fresh in cache")
+
+			res.Header.Set("Age", fmt.Sprint(currentAge))
+			r.Response = res
+			return nil
+		}
+	}
+
+	// TODO: Attempt to validate responses
+	return c.doReq(r)
 }
 
 func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request) {
