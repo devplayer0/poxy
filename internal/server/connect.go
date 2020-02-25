@@ -13,7 +13,7 @@ func (s *Server) proxyCONNECT(w http.ResponseWriter, r *http.Request) {
 	log.WithFields(log.Fields{
 		"source": r.RemoteAddr,
 		"target": r.URL.Host,
-	}).Trace("Performing CONNECT request")
+	}).Debug("Performing CONNECT request")
 
 	// Attempt to connect to the requested backend
 	dstConn, err := net.Dial("tcp", r.URL.Host)

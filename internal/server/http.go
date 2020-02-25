@@ -80,7 +80,7 @@ func calculateVaryKey(vary string, r *http.Request) string {
 	log.WithFields(log.Fields{
 		"key":   key,
 		"value": value,
-	}).Debug("Unencoded Vary key")
+	}).Trace("Unencoded Vary key")
 
 	// Hash the value since it might be quite long
 	return fmt.Sprintf("%v_%v", key, hashString(value))
@@ -115,7 +115,7 @@ func (c *Cache) keyedPath(vary string, r *http.Request) (string, error) {
 
 			// The current request generated the same Vary key as a stored reponse
 			if calculateVaryKey(m[1], r) == info.Name() {
-				log.WithField("key", info.Name()).Debug("Found existing cached request matching Vary requirements")
+				log.WithField("key", info.Name()).Trace("Found existing cached request matching Vary requirements")
 				candidates = append(candidates, info)
 			}
 		}
@@ -382,6 +382,11 @@ func (c *Cache) Load(r *http.Request) error {
 	if !mustRevalidate {
 		freshness := freshness(res)
 		currentAge := age(f, res)
+		log.WithFields(log.Fields{
+			"path":      path,
+			"age":       currentAge,
+			"freshness": freshness,
+		}).Trace("Request age")
 
 		// Is the stored response stale?
 		if freshness > currentAge {
@@ -406,15 +411,17 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request) {
 		"source": r.RemoteAddr,
 		"method": r.Method,
 		"url":    r.URL,
-	}).Trace("Proxying HTTP request")
+	}).Debug("Proxying HTTP request")
 
 	// Load the response through the caching layer, which will transparently store / read cached responses
+	start := time.Now()
 	if err := s.cache.Load(r); err != nil {
 		log.WithField("err", err).Error("Failed to proxy HTTP request")
 		http.Error(w, err.Error(), r.Response.StatusCode)
 		return
 	}
 	defer r.Response.Body.Close()
+	log.WithField("time", time.Now().Sub(start).Milliseconds()).Debug("Request time (ms)")
 
 	resHeader := w.Header()
 	for name, value := range r.Response.Header {
