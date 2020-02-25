@@ -20,6 +20,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// ReqInfo describes a proxied request
+type ReqInfo struct {
+	Method string `json:"method"`
+	URL    string `json:"url"`
+	Status int    `json:"status"`
+	Type   string `json:"type"`
+}
+
 // Cache represents an HTTP cache based on RFC 7234 (https://tools.ietf.org/html/rfc7234)
 // Varying requests and serving fresh responses are (mostly) implemented
 // Validation of stale requests is unimplemented
@@ -135,7 +143,7 @@ func (c *Cache) keyedPath(vary string, r *http.Request) (string, error) {
 
 // Store transparently handles caching a HTTP response
 // https://tools.ietf.org/id/draft-ietf-httpbis-cache-01.html#response.cacheability
-func (c *Cache) Store(r *http.Response) error {
+func (c *Cache) Store(r *http.Response, info *ReqInfo) error {
 	if c.Path == "" || r.Request.Method != http.MethodGet || r.StatusCode != http.StatusOK {
 		// If path is empty, caching is disabled
 		// We will only cache GET requests with a 200 response
@@ -204,6 +212,7 @@ func (c *Cache) Store(r *http.Response) error {
 	}
 
 	// Transparently replace the network response with the cached one on-disk
+	info.Type = "stored"
 	*r = *cacheRes
 	return nil
 }
@@ -227,10 +236,11 @@ func controlSet(h http.Header, c string) bool {
 }
 
 // doReq actually performs the upstream request (in the event of a cache miss)
-func (c *Cache) doReq(r *http.Request) error {
+func (c *Cache) doReq(r *http.Request, info *ReqInfo) error {
 	log.WithFields(log.Fields{
 		"uri": r.RequestURI,
 	}).Trace("Cache miss!")
+	info.Type = "proxied"
 
 	// Create a new request to the requested server
 	r2, err := http.NewRequest(r.Method, r.RequestURI, r.Body)
@@ -252,7 +262,7 @@ func (c *Cache) doReq(r *http.Request) error {
 	}
 
 	// Try and store the response in the cache, if allowed
-	if err = c.Store(res); err != nil {
+	if err = c.Store(res, info); err != nil {
 		r.Response = errRes(http.StatusInternalServerError)
 		return err
 	}
@@ -354,10 +364,10 @@ func age(f *os.File, r *http.Response) int64 {
 
 // Load transparently attempts to retrieve a HTTP response from cache, connecting to the backend as necessary
 // https://tools.ietf.org/id/draft-ietf-httpbis-cache-01.html#constructing.responses.from.caches
-func (c *Cache) Load(r *http.Request) error {
+func (c *Cache) Load(r *http.Request, info *ReqInfo) error {
 	if c.Path == "" {
 		// If cache path is empty, caching is disabled
-		return c.doReq(r)
+		return c.doReq(r, info)
 	}
 
 	// Attempt to find a response matching the keys in the request (Request URI, Path and varied headers)
@@ -375,7 +385,7 @@ func (c *Cache) Load(r *http.Request) error {
 		}
 
 		// This response is definitely not cached based on the key
-		return c.doReq(r)
+		return c.doReq(r, info)
 	}
 
 	// Parse the stored response
@@ -408,6 +418,7 @@ func (c *Cache) Load(r *http.Request) error {
 				"age":  currentAge,
 			}).Trace("Request is fresh in cache")
 
+			info.Type = "cache hit"
 			res.Header.Set("Age", fmt.Sprint(currentAge))
 			r.Response = res
 			return nil
@@ -415,7 +426,7 @@ func (c *Cache) Load(r *http.Request) error {
 	}
 
 	// TODO: Attempt to validate responses
-	return c.doReq(r)
+	return c.doReq(r, info)
 }
 
 // proxyHTTP performs proxying of plain HTTP requests, with optional caching
@@ -425,10 +436,16 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request) {
 		"method": r.Method,
 		"url":    r.URL,
 	}).Debug("Proxying HTTP request")
+	info := ReqInfo{
+		Method: r.Method,
+		URL:    r.RequestURI,
+	}
+	defer s.publishJSON(reqStream, &info)
 
 	// Load the response through the caching layer, which will transparently store / read cached responses
 	start := time.Now()
-	if err := s.cache.Load(r); err != nil {
+	if err := s.cache.Load(r, &info); err != nil {
+		info.Type = "failed"
 		log.WithField("err", err).Error("Failed to proxy HTTP request")
 		http.Error(w, err.Error(), r.Response.StatusCode)
 		return
@@ -440,8 +457,11 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request) {
 	for name, value := range r.Response.Header {
 		resHeader[name] = value
 	}
+
+	info.Status = r.Response.StatusCode
 	w.WriteHeader(r.Response.StatusCode)
 	if _, err := io.Copy(w, r.Response.Body); err != nil {
+		info.Type = "failed"
 		log.WithField("err", err).Error("Failed to send proxied HTTP response")
 	}
 }

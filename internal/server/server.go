@@ -3,6 +3,8 @@ package server
 import (
 	"net/http"
 
+	"github.com/r3labs/sse"
+
 	"github.com/gorilla/mux"
 )
 
@@ -11,6 +13,7 @@ type Server struct {
 	router *mux.Router
 	http   *http.Server
 	cache  *Cache
+	events *sse.Server
 }
 
 // NewServer returns a new HTTP(S) proxy instance

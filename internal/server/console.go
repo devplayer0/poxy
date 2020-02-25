@@ -1,10 +1,17 @@
 package server
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+
+	"github.com/r3labs/sse"
+	log "github.com/sirupsen/logrus"
 )
+
+const reqStream = "requests"
 
 // spaHandler implements the http.Handler interface, so we can use it
 // to respond to HTTP requests. The path to the static directory and
@@ -49,7 +56,50 @@ func (h spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.FileServer(http.Dir(h.staticPath)).ServeHTTP(w, r)
 }
 
+// JSONResponse Sends a JSON payload in response to a HTTP request
+func JSONResponse(w http.ResponseWriter, v interface{}, statusCode int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+
+	enc := json.NewEncoder(w)
+	if err := enc.Encode(v); err != nil {
+		log.WithField("err", err).Error("Failed to serialize JSON payload")
+
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, "Failed to serialize JSON payload")
+	}
+}
+
+type jsonError struct {
+	Message string `json:"message"`
+}
+
+// JSONErrResponse Sends an `error` as a JSON object with a `message` property
+func JSONErrResponse(w http.ResponseWriter, err error, statusCode int) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(statusCode)
+
+	enc := json.NewEncoder(w)
+	enc.Encode(jsonError{err.Error()})
+}
+
+func (s *Server) publishJSON(id string, v interface{}) error {
+	enc, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("Failed to encode message payload: %w", err)
+	}
+
+	s.events.Publish(id, &sse.Event{
+		Data: enc,
+	})
+	return nil
+}
+
 func (s *Server) mountConsole() {
+	s.events = sse.New()
+	s.events.CreateStream(reqStream)
+	s.router.HandleFunc("/events", s.events.HTTPHandler)
+
 	spa := spaHandler{
 		staticPath: "static/",
 		indexPath:  "index.html",
