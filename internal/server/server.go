@@ -17,7 +17,7 @@ type Server struct {
 }
 
 // NewServer returns a new HTTP(S) proxy instance
-func NewServer(cachePath string) (*Server, error) {
+func NewServer(addr string, cachePath string) (*Server, error) {
 	c, err := NewCache(cachePath)
 	if err != nil {
 		return nil, err
@@ -30,7 +30,7 @@ func NewServer(cachePath string) (*Server, error) {
 	s.mountConsole()
 
 	h := &http.Server{
-		Addr:    ":8080",
+		Addr:    addr,
 		Handler: s,
 	}
 

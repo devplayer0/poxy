@@ -10,11 +10,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+var addr string
 var cachePath string
 
 func init() {
 	verbose := flag.Bool("v", false, "write debug output")
 	trace := flag.Bool("trace", false, "write details about requests")
+	flag.StringVar(&addr, "addr", ":8080", "Listen address")
 	flag.StringVar(&cachePath, "cache", "", "enable caching in directory")
 	flag.Parse()
 
@@ -39,7 +41,7 @@ func init() {
 	log.SetLevel(level)
 }
 func main() {
-	s, err := server.NewServer(cachePath)
+	s, err := server.NewServer(addr, cachePath)
 	if err != nil {
 		log.WithField("err", err).Fatal("Failed to create server")
 	}
@@ -55,6 +57,7 @@ func main() {
 	}()
 
 	<-sigs
+	log.Info("Shutting down...")
 	if err := s.Stop(); err != nil {
 		log.WithField("err", err).Fatal("Failed to stop server")
 	}
