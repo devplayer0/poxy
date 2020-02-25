@@ -3,7 +3,7 @@ Vue.component('RequestInfo', {
     <li>
       <code>@{{ info.time }}</code>
       <span :class="badgeClasses(info)">{{ info.type }}</span>
-      {{ info.method }} {{ info.url }} {{ info.status }}
+      {{ info.method }} {{ info.url }} {{ info.status }} {{ info.duration }}ms
     </li>
   `,
   props: ['info'],

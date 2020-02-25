@@ -22,11 +22,12 @@ import (
 
 // ReqInfo describes a proxied request
 type ReqInfo struct {
-	Time   int64  `json:"time"`
-	Method string `json:"method"`
-	URL    string `json:"url"`
-	Status int    `json:"status"`
-	Type   string `json:"type"`
+	Time     int64  `json:"time"`
+	Duration int64  `json:"duration"`
+	Method   string `json:"method"`
+	URL      string `json:"url"`
+	Status   int    `json:"status"`
+	Type     string `json:"type"`
 }
 
 // Cache represents an HTTP cache based on RFC 7234 (https://tools.ietf.org/html/rfc7234)
@@ -453,7 +454,8 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer r.Response.Body.Close()
-	log.WithField("time", time.Now().Sub(start).Milliseconds()).Debug("Request time (ms)")
+	info.Duration = time.Now().Sub(start).Milliseconds()
+	log.WithField("time", info.Duration).Debug("Request time (ms)")
 
 	resHeader := w.Header()
 	for name, value := range r.Response.Header {
