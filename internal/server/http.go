@@ -281,18 +281,31 @@ func freshness(r *http.Response) int64 {
 			}
 		}
 	}
-	// Otherwise attempt to calculate based on Expires / Date headers
+
+	// Otherwise try to calculate based on Date header
+	dates, ok := r.Header["Date"]
+	if !ok || len(dates) != 1 {
+		return 0
+	}
+	date, err := http.ParseTime(dates[0])
+	if err != nil {
+		return 0
+	}
+
+	// Comparing against Expires header
 	if exp, ok := r.Header["Expires"]; ok && len(exp) == 1 {
 		if e, err := http.ParseTime(exp[0]); err == nil {
-			if date, ok := r.Header["Date"]; ok && len(date) == 1 {
-				if d, err := http.ParseTime(date[0]); err == nil {
-					return int64(e.Sub(d).Seconds())
-				}
-			}
+			return int64(e.Sub(date).Seconds())
 		}
 	}
 
-	// TODO: Implement heuristic
+	// Otherwise attempt to use heuristic defined at
+	// https://tools.ietf.org/id/draft-ietf-httpbis-cache-01.html#rfc.section.4.2.2
+	if lms, ok := r.Header["Last-Modified"]; ok && len(lms) == 1 {
+		if lm, err := http.ParseTime(lms[0]); err == nil {
+			return int64(date.Sub(lm).Seconds() * 0.1)
+		}
+	}
 	return 0
 }
 
